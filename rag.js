@@ -63,7 +63,7 @@ async function ragQuery(question) {
 
 export { searchSimilar, ragQuery };
 
-// --- Test (uniquement si lancé directement) ---
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   await ragQuery('Qui a créé Node.js et quand ?');
   await ragQuery('Comment Node.js gère-t-il de nombreuses connexions simultanées ?');

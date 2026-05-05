@@ -33,7 +33,14 @@ async function runAgent(tools, toolFunctions, userMessageOrHistory) {
     messages.push(choice.message);
 
     if (choice.finish_reason === 'stop') {
-      return choice.message.content;
+      const content = choice.message.content;
+      if (Array.isArray(content)) {
+        return content
+          .filter(part => part.type === 'text')
+          .map(part => part.text)
+          .join('');
+      }
+      return content;
     }
 
     if (choice.finish_reason === 'tool_calls') {

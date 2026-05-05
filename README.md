@@ -5,17 +5,19 @@ Projet du cours **NodeJs : Communication avec IA — Jour 3 : Tool Use et Introd
 Construction progressive d'un agent intelligent capable de :
 - Calculer des expressions mathématiques
 - Récupérer la météo en temps réel
-- Chercher sur le web
+- Chercher sur le web (Tavily)
 - Interroger un corpus privé indexé dans Pinecone (RAG)
 - Mémoriser une conversation multi-tours
 
 ## Stack
 
-- **Node.js** 22+ avec ES Modules
-- **Mistral AI** — `mistral-small-latest` (LLM) + `mistral-embed` (embeddings 1024 dims)
-- **Pinecone** — base vectorielle serverless (cosine, AWS us-east-1)
-- **wttr.in** — API météo gratuite
-- **DuckDuckGo Instant Answer API** — recherche web
+| Service | Usage | Plan |
+|---|---|---|
+| **Mistral AI** | LLM (`mistral-small-latest`) + embeddings (`mistral-embed`, 1024 dims) | Free tier |
+| **Pinecone** | Base vectorielle serverless (cosine, AWS us-east-1) | Free tier (2 GB) |
+| **Tavily** | Recherche web optimisée pour agents IA | Free tier (1 000 req/mois) |
+| **wttr.in** | Météo | Gratuit, sans clé |
+| **Node.js 22+** | Runtime ES Modules | — |
 
 ## Installation
 
@@ -23,24 +25,33 @@ Construction progressive d'un agent intelligent capable de :
 npm install
 ```
 
-Crée un fichier `.env` à la racine :
+Crée un fichier `.env` à la racine (cf. [example.env](example.env)) :
 
 ```env
 MISTRAL_API_KEY=xxxxxxxxxxxxxxxxxxxxxxxx
 PINECONE_API_KEY=pcsk_xxxxxxxxxxxxxxxxxxxxxxxx
 PINECONE_INDEX_NAME=mini-perplexity
 PINECONE_INDEX_HOST=
+TAVILY_API_KEY=tvly-xxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-> `PINECONE_INDEX_HOST` sera rempli automatiquement par `pinecone-setup.js`.
+> `PINECONE_INDEX_HOST` se remplit automatiquement au premier `node pinecone-setup.js`.
 
-## Mise en route
+### Où récupérer les clés
+
+| Clé | URL |
+|---|---|
+| Mistral | https://console.mistral.ai/api-keys |
+| Pinecone | https://app.pinecone.io → API keys |
+| Tavily | https://tavily.com → Sign up → API key (sans CB) |
+
+## Mise en route — ordre d'exécution
 
 ```bash
 # 1. Crée l'index Pinecone si nécessaire et récupère son host
 node pinecone-setup.js
 
-# 2. Découpe le corpus, génère les embeddings et les upsert dans Pinecone
+# 2. Découpe le corpus, génère les embeddings et les upsert
 node embed-store.js
 
 # 3. Vérifie la pipeline RAG (retrieval + génération)
@@ -57,7 +68,7 @@ node chat-agent.js
 
 ```
 agent.js              ← Boucle agentique générique (runAgent)
-agent-loop.js         ← Re-export de runAgent
+agent-loop.js         ← Re-export
 
 calculatrice.js       ← Phase 1 : appel d'outil unique
 weather-agent.js      ← Phase 2 : agent météo en boucle
@@ -66,7 +77,7 @@ chat-agent.js         ← Phase 4 : mémoire de conversation persistante
 
 pinecone-setup.js     ← Phase 5 : création / connexion à l'index Pinecone
 embed-store.js        ← Phase 6 : chunking + embedding + upsert
-rag.js                ← Phases 7-8 : recherche par similarité + génération avec contexte
+rag.js                ← Phases 7-8 : recherche par similarité + génération
 hybrid-agent.js       ← Phase 9 : agent 4 outils (calcul, météo, web, RAG)
 ```
 
@@ -78,21 +89,24 @@ hybrid-agent.js       ← Phase 9 : agent 4 outils (calcul, météo, web, RAG)
 2. Si `finish_reason === 'stop'` → retourne le contenu final
 3. Si `finish_reason === 'tool_calls'` → exécute chaque tool localement, push le résultat dans l'historique avec `role: 'tool'`, et reboucle
 
-Si on passe un tableau `messages` à la place d'une string, l'historique est partagé par référence — c'est ce qui permet la mémoire de conversation dans `chat-agent.js`.
+Quand on passe un tableau `messages` au lieu d'une string, l'historique est partagé par référence — c'est ce qui permet la mémoire de conversation dans `chat-agent.js`.
 
 ## Pipeline RAG
 
 **Indexation** ([embed-store.js](embed-store.js))
+
 ```
 texte → simpleChunk(40 mots) → mistral-embed → upsert Pinecone (id, values, metadata.text)
 ```
 
 **Retrieval** ([rag.js](rag.js))
+
 ```
 question → mistral-embed → query Pinecone (topK=3) → matches[] avec scores cosine
 ```
 
 **Génération avec contexte**
+
 ```
 contexte = matches.map(m => m.text).join('\n\n')
 LLM avec system prompt strict : "Réponds uniquement à partir du contexte fourni"
@@ -100,26 +114,39 @@ LLM avec system prompt strict : "Réponds uniquement à partir du contexte fourn
 
 ## Outils de l'agent hybride
 
-| Outil | Fonction | API |
-|---|---|---|
-| `calculate` | Évalue une expression mathématique | `eval()` (sandbox local) |
-| `get_weather` | Météo d'une ville | wttr.in (JSON) |
-| `web_search` | Recherche web | DuckDuckGo Instant Answer |
-| `rag_search` | Recherche sémantique dans le corpus privé | Mistral embed + Pinecone query |
+| Outil | Fonction | API | Description |
+|---|---|---|---|
+| `calculate` | Évalue une expression mathématique | `eval()` local | Pour tout calcul arithmétique |
+| `get_weather` | Météo d'une ville | wttr.in (JSON gratuit) | Pour les conditions climatiques |
+| `web_search` | Recherche web | Tavily | Pour les faits récents / temps réel |
+| `rag_search` | Recherche sémantique | Mistral embed + Pinecone | Pour le corpus privé indexé |
 
-Le LLM choisit l'outil selon la `description` JSON Schema de chaque tool.
+Le LLM choisit automatiquement l'outil selon la `description` JSON Schema de chaque tool.
+
+## Pourquoi Tavily plutôt que DuckDuckGo
+
+L'API gratuite **DuckDuckGo Instant Answer** ne retourne quasiment jamais de résultats utiles : elle ne fait pas de recherche web, juste des "instant answers" (Wikipedia / disambiguation). Sur des requêtes type "Coupe du Monde 2022" ou "cours du Bitcoin", elle retourne vide → l'agent s'épuise en 10 tours.
+
+**Tavily** est conçue spécifiquement pour les agents LLM :
+- Vraie recherche web avec extraction de contenu
+- Renvoie un champ `answer` synthétisé (idéal pour LLM)
+- Free tier 1 000 req/mois sans carte bancaire
+- Endpoint REST simple : `POST https://api.tavily.com/search`
 
 ## Limitations connues
 
-- **DuckDuckGo Instant Answer** retourne souvent vide pour les requêtes actualités/sport (ex: "Coupe du Monde 2022"). L'agent s'arrête alors à 10 tours.
-- **Mistral free tier** : rate limit 429 sur les embeddings. `getEmbedding()` retry avec backoff exponentiel (2s → 32s).
-- **`eval()` dans `calculate`** : à n'utiliser qu'en dev/edu — jamais en prod sans sandbox.
+- **`eval()` dans `calculate`** : à n'utiliser qu'en dev/edu — jamais en prod sans sandbox
+- **Mistral free tier** : rate limit 429 sur les embeddings → `getEmbedding()` retry avec backoff exponentiel (2s → 32s)
+- **Limite agent** : 10 itérations maximum dans la boucle agentique pour éviter les boucles infinies
 
-## Structure du `.env`
+## Variables d'environnement
 
-| Variable | Description |
-|---|---|
-| `MISTRAL_API_KEY` | Clé API Mistral (chat + embed) |
-| `PINECONE_API_KEY` | Clé API Pinecone |
-| `PINECONE_INDEX_NAME` | Nom de l'index (défaut : `mini-perplexity`) |
-| `PINECONE_INDEX_HOST` | URL complète de l'index, écrite automatiquement par `pinecone-setup.js` |
+| Variable | Description | Source |
+|---|---|---|
+| `MISTRAL_API_KEY` | Clé Mistral (chat + embed) | console.mistral.ai |
+| `PINECONE_API_KEY` | Clé Pinecone | app.pinecone.io |
+| `PINECONE_INDEX_NAME` | Nom de l'index | défaut : `mini-perplexity` |
+| `PINECONE_INDEX_HOST` | URL de l'index | écrit auto par `pinecone-setup.js` |
+| `TAVILY_API_KEY` | Clé Tavily | tavily.com |
+
+

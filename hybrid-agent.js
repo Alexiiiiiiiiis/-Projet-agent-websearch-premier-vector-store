@@ -93,23 +93,34 @@ const searchTool = {
 };
 
 async function web_search({ query }) {
-  const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
   try {
-    const response = await fetch(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (educational project)' },
-      signal: AbortSignal.timeout(8000)
+    const response = await fetch('https://api.tavily.com/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        api_key: process.env.TAVILY_API_KEY,
+        query,
+        search_depth: 'basic',
+        max_results: 5,
+        include_answer: true
+      }),
+      signal: AbortSignal.timeout(10000)
     });
+
+    if (!response.ok) return { error: `Tavily API error ${response.status}` };
+
     const data = await response.json();
+    const results = (data.results ?? []).slice(0, 5).map(r => ({
+      title: r.title,
+      url: r.url,
+      content: r.content
+    }));
 
-    if (data.Answer) return [{ text: data.Answer, url: '' }];
-    if (data.AbstractText) return [{ text: data.AbstractText, url: data.AbstractURL }];
-
-    const topics = (data.RelatedTopics ?? [])
-      .filter(t => t.Text)
-      .slice(0, 5)
-      .map(t => ({ text: t.Text, url: t.FirstURL }));
-
-    return topics.length > 0 ? topics : { message: 'Aucun résultat trouvé.' };
+    return data.answer
+      ? { answer: data.answer, sources: results }
+      : results.length > 0
+        ? results
+        : { message: 'Aucun résultat trouvé.' };
   } catch {
     return { message: 'Service de recherche inaccessible.' };
   }
